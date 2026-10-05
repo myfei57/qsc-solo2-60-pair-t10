@@ -27,10 +27,14 @@ class FlowRepository:
         return load_float(self._store, FLOW_KEY)
 
     def record(self, sensor: Sensor) -> None:
-        """Persist a full sensor reading atomically enough for the console."""
+        """Persist a full sensor reading in one document transaction."""
 
-        self.persist_flow(sensor.flow)
-        save_float(self._store, TURBIDITY_KEY, sensor.turbidity)
+        self._store.put_many(
+            {
+                FLOW_KEY: str(float(sensor.flow)),
+                TURBIDITY_KEY: str(float(sensor.turbidity)),
+            }
+        )
 
     def turbidity(self) -> float:
         value, _ = load_float(self._store, TURBIDITY_KEY)

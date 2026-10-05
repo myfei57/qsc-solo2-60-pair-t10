@@ -67,6 +67,7 @@ def route_table() -> list[Route]:
         Route("GET", "/quota", "read the chlorine accumulator", "quota_get"),
         Route("POST", "/quota/check", "check chemical quota usage", "quota_check"),
         Route("GET", "/audit", "list chemical dosing audit entries", "audit_list"),
+        Route("GET", "/request-audit", "list request validation and outcome audit entries", "request_audit"),
         Route("GET", "/audit/summary", "audit entry count by kind", "audit_summary"),
         Route("POST", "/audit/filter", "filter audit entries by kind", "audit_filter"),
         Route("POST", "/cycle", "run a full treatment control cycle", "cycle"),

@@ -369,7 +369,7 @@ class ConsoleCase(unittest.TestCase):
         self.assertIn("must be a number", body["error"])
 
         status, body = self.call("POST", "/filter/close", {"id": "ghost"})
-        self.assertEqual(status, 400)
+        self.assertEqual(status, 404)
         self.assertIn("not found", body["error"])
 
 

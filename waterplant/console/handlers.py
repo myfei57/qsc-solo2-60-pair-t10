@@ -23,6 +23,7 @@ from . import simulate as simulate_module
 from . import snapshot as snapshot_module
 from . import telemetry as telemetry_module
 from .cycle import run_cycle
+from .contract import CONTRACTS
 from .http import Request, Response, csv_response, json_response, text_response
 from .report import text_report
 from .routes import route_table
@@ -70,7 +71,16 @@ def pipeline(server: "Server", request: Request) -> Response:
 
 
 def catalog(server: "Server", request: Request) -> Response:
-    return json_response({"routes": [route.as_dict() for route in route_table()]})
+    return json_response(
+        {
+            "routes": [route.as_dict() for route in route_table()],
+            "contracts": [
+                {"method": method, "path": path, **contract.as_dict()}
+                for (method, path), contract in sorted(CONTRACTS.items())
+            ],
+            "error_code_policy": "global registry with fixed module segments",
+        }
+    )
 
 
 def ops_counters(server: "Server", request: Request) -> Response:
@@ -121,7 +131,7 @@ def intake_flow_get(server: "Server", request: Request) -> Response:
 def coag_dose(server: "Server", request: Request) -> Response:
     flow = request.float_field("flow")
     validate_flow(flow)
-    dose = server.runtime.coag_doser.update_flow_and_dose(flow)
+    dose = server.runtime.coag_doser.update_flow_and_dose(flow, request.operation_key)
     return json_response({"dose": dose})
 
 
@@ -150,7 +160,7 @@ def chlor_target(server: "Server", request: Request) -> Response:
 
 
 def chlor_dose(server: "Server", request: Request) -> Response:
-    return json_response({"dose": server.runtime.chlor_doser.apply_residual()})
+    return json_response({"dose": server.runtime.chlor_doser.apply_residual(request.operation_key)})
 
 
 def clearwell_level(server: "Server", request: Request) -> Response:
@@ -277,6 +287,16 @@ def audit_summary(server: "Server", request: Request) -> Response:
 def audit_filter(server: "Server", request: Request) -> Response:
     entries = server.runtime.auditor.filter(request.str_field("kind"))
     return json_response({"entries": [entry.as_dict() for entry in entries]})
+
+
+def request_audit(server: "Server", request: Request) -> Response:
+    entries = server.request_auditor.entries()
+    return json_response(
+        {
+            "entries": [entry.as_dict() for entry in entries],
+            "count": len(entries),
+        }
+    )
 
 
 def cycle(server: "Server", request: Request) -> Response:

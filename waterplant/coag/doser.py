@@ -41,12 +41,12 @@ class Doser:
             return 0.0
         return self.dose_for_flow(value)
 
-    def update_flow_and_dose(self, value: float) -> float:
+    def update_flow_and_dose(self, value: float, operation_key: str = "") -> float:
         """Persist the new flow, then dose against the value just written."""
 
         self._flow.persist_flow(value)
         dose = self.dose_from_persisted_flow()
-        self._auditor.record(COAGULANT, f"{dose:.4f}")
+        self._auditor.record(COAGULANT, f"{dose:.4f}", operation_key)
         return dose
 
     def dose_plan(self, flow: float, turbidity: float) -> float:

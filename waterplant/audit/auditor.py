@@ -23,9 +23,13 @@ class Entry:
     time: str
     kind: str
     detail: str
+    operation_key: str = ""
 
     def as_dict(self) -> dict[str, str]:
-        return {"id": self.id, "time": self.time, "kind": self.kind, "detail": self.detail}
+        data = {"id": self.id, "time": self.time, "kind": self.kind, "detail": self.detail}
+        if self.operation_key:
+            data["operation_key"] = self.operation_key
+        return data
 
 
 class Auditor:
@@ -34,12 +38,17 @@ class Auditor:
     def __init__(self, store: Store) -> None:
         self._store = store
 
-    def record(self, kind: str, detail: str) -> Entry:
+    def record(self, kind: str, detail: str, operation_key: str = "") -> Entry:
+        if operation_key:
+            for entry in self.entries():
+                if entry.operation_key == operation_key:
+                    return entry
         entry = Entry(
             id=uuid.uuid4().hex,
             time=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
             kind=kind,
             detail=detail,
+            operation_key=operation_key,
         )
         append_command(self._store, AUDIT_KEY, json.dumps(entry.as_dict(), ensure_ascii=False))
         return entry
@@ -59,6 +68,7 @@ class Auditor:
                     time=str(payload.get("time", "")),
                     kind=str(payload.get("kind", "")),
                     detail=str(payload.get("detail", "")),
+                    operation_key=str(payload.get("operation_key", "")),
                 )
             )
         return entries

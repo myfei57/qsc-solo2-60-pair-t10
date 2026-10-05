@@ -26,11 +26,11 @@ class Doser:
     def dose_for_residual(self) -> float:
         return self.current_target()
 
-    def apply_residual(self) -> float:
+    def apply_residual(self, operation_key: str = "") -> float:
         """Record a chlorine dose and return the amount applied."""
 
         dose = self.dose_for_residual()
-        self._auditor.record(CHLORINE, f"{dose:.4f}")
+        self._auditor.record(CHLORINE, f"{dose:.4f}", operation_key)
         return dose
 
     def target_for_demand(self, demand: float) -> float:

@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
+from typing import Any
+
 from waterplant.clearwell import validate_level
 from waterplant.filter import validate_zone
 from waterplant.flow import validate_factor
@@ -10,6 +14,87 @@ from waterplant.quota import validate_amount
 
 from .http import Request, Response, json_response
 from .runtime import Runtime
+from .saga import Saga, Step
+
+
+def _record_intake(rt: Runtime, sensor: Sensor) -> bool:
+    rt.flow_repository.record(sensor)
+    rt.trend.record(sensor.flow)
+    return True
+
+
+def _operation_key(request: Request) -> str:
+    if request.operation_key:
+        return request.operation_key
+    raw = json.dumps(
+        {"path": request.path, "payload": request.payload},
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+    )
+    return "cycle:" + hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+def _execute(rt: Runtime, request: Request, values: dict[str, Any]) -> None:
+    flow = values["flow"]
+    samples = values["samples"]
+    demand = values["demand"]
+    level = values["level"]
+    bed_id = values["bed_id"]
+    amount = values["amount"]
+    operation_key = _operation_key(request)
+    saga = Saga(rt.store, operation_key)
+
+    mixed = mix(samples)
+    saga.run(
+        Step("record_intake", lambda: _record_intake(rt, Sensor(flow=flow, turbidity=mixed)))
+    )
+    values["coag_dose"] = saga.run(
+        Step(
+            "coagulant_dose",
+            lambda: rt.coag_doser.update_flow_and_dose(
+                flow, f"{operation_key}:coag" if request.operation_key else ""
+            ),
+        )
+    )
+    values["turb_dose"] = saga.run(Step("turbidity_dose", lambda: rt.sampler.judge(samples)))
+    stable, adjustment = saga.run(
+        Step(
+            "ph_verdict",
+            lambda: (lambda verdict: (verdict.stable, verdict.adjustment))(
+                rt.stabilizer.stabilize()
+            ),
+        )
+    )
+    values["ph_stable"] = stable
+    values["ph_adjustment"] = adjustment
+    saga.run(Step("residual_target", lambda: rt.well.update_residual_demand(demand)))
+    if stable:
+        values["chlor_dose"] = saga.run(
+            Step(
+                "chlorine_dose",
+                lambda: rt.chlor_doser.apply_residual(
+                    f"{operation_key}:chlor" if request.operation_key else ""
+                ),
+            )
+        )
+    else:
+        values["chlor_dose"] = 0.0
+    values["min_level"] = saga.run(
+        Step("clearwell_level", lambda: rt.well.adjust_level(level, rt.inlet, rt.outlet))
+    )
+    values["rotation"] = saga.run(Step("rotation", lambda: rt.backwash.order_rotation()))
+    values["on_duty"] = rt.bank.on_duty() or ""
+    if bed_id:
+        saga.run(
+            Step(
+                f"backwash:{bed_id}",
+                lambda: rt.backwash.start(bed_id),
+                compensate=lambda: rt.bank.open(bed_id),
+            )
+        )
+    values["quota_value"] = saga.run(Step("quota", lambda: rt.accumulator.add(amount)))
+    values["completed_steps"] = saga.completed_steps()
 
 
 def run_cycle(rt: Runtime, request: Request) -> Response:
@@ -29,34 +114,43 @@ def run_cycle(rt: Runtime, request: Request) -> Response:
     validate_amount(amount)
     validate_level(level)
 
-    rt.flow_repository.record(Sensor(flow=flow, turbidity=mix(samples)))
-    rt.trend.record(flow)
-    coag_dose = rt.coag_doser.update_flow_and_dose(flow)
-    turb_dose = rt.sampler.judge(samples)
-    ph_verdict = rt.stabilizer.stabilize()
-    rt.well.update_residual_demand(demand)
-    chlor_dose = rt.chlor_doser.apply_residual() if ph_verdict.stable else 0.0
-    min_level = rt.well.adjust_level(level, rt.inlet, rt.outlet)
-    rotation = rt.backwash.order_rotation()
-    duty = rt.bank.on_duty()
-    if bed_id:
-        rt.backwash.start(bed_id)
-    quota_value = rt.accumulator.add(amount)
+    values: dict[str, Any] = {
+        "flow": flow,
+        "samples": samples,
+        "demand": demand,
+        "level": level,
+        "bed_id": bed_id,
+        "amount": amount,
+    }
+    try:
+        _execute(rt, request, values)
+    except ValueError as exc:
+        return json_response(
+            {
+                "error": str(exc),
+                "code": "109010",
+                "message": "cycle stopped after one or more steps completed",
+                "retry": "resubmit the same request; completed checkpoints will not run again",
+                "operation_key": _operation_key(request),
+            },
+            202,
+        )
 
     return json_response(
         {
-            "coag_dose": coag_dose,
-            "turb_dose": turb_dose,
-            "chlor_dose": chlor_dose,
-            "min_level": min_level,
+            "coag_dose": values["coag_dose"],
+            "turb_dose": values["turb_dose"],
+            "chlor_dose": values["chlor_dose"],
+            "min_level": values["min_level"],
             "level": rt.well.level(),
-            "quota": quota_value,
-            "rotation": rotation,
-            "on_duty": duty or "",
+            "quota": values["quota_value"],
+            "rotation": values["rotation"],
+            "on_duty": values["on_duty"],
             "backwash": bed_id,
             "drains": rt.backwash.drain_count(),
             "audit_count": rt.auditor.count(),
-            "ph_stable": ph_verdict.stable,
-            "ph_adjustment": ph_verdict.adjustment,
+            "ph_stable": values["ph_stable"],
+            "ph_adjustment": values["ph_adjustment"],
+            "completed_steps": values["completed_steps"],
         }
     )
