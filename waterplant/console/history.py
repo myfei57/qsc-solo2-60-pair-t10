@@ -4,16 +4,13 @@ from __future__ import annotations
 
 from waterplant.store import Store, append_event, clear_commands, event_count, has_key, list_events
 
-from .http import Request, RequestError, Response, json_response
+from .http import Request, Response, json_response
 
 EVENT_KEY = "console:events"
 
 
 def append(store: Store, request: Request) -> Response:
-    kind = request.str_field("kind")
-    if not kind:
-        raise RequestError(400, "kind is required")
-    append_event(store, EVENT_KEY, kind, request.str_field("value"))
+    append_event(store, EVENT_KEY, request.str_field("kind"), request.str_field("value"))
     return json_response({"appended": True})
 
 

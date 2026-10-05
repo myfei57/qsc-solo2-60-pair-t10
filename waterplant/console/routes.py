@@ -86,6 +86,7 @@ def route_table() -> list[Route]:
         Route("POST", "/inventory/consume", "consume chemical stock oldest lot first", "inventory_consume"),
         Route("POST", "/inventory/reorder-level", "set the inventory reorder level", "inventory_reorder_level"),
         Route("GET", "/metrics", "console request counters", "metrics"),
+        Route("GET", "/requests", "request acceptance and rejection audit", "requests_list"),
         Route("POST", "/metrics/reset", "reset console request counters", "metrics_reset"),
         Route("GET", "/export/audit", "dosing audit trail as CSV", "export_audit"),
         Route("GET", "/export/telemetry", "telemetry counters as CSV", "export_telemetry"),

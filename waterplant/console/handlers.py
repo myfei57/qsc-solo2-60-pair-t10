@@ -23,6 +23,7 @@ from . import simulate as simulate_module
 from . import snapshot as snapshot_module
 from . import telemetry as telemetry_module
 from .cycle import run_cycle
+from .contracts import contract_for
 from .http import Request, Response, csv_response, json_response, text_response
 from .report import text_report
 from .routes import route_table
@@ -70,7 +71,28 @@ def pipeline(server: "Server", request: Request) -> Response:
 
 
 def catalog(server: "Server", request: Request) -> Response:
-    return json_response({"routes": [route.as_dict() for route in route_table()]})
+    routes = []
+    for route in route_table():
+        contract = contract_for(route.method, route.path)
+        routes.append(
+            {
+                **route.as_dict(),
+                "importance": contract.importance.value if contract else "",
+                "idempotency_required": contract.idempotency_required if contract else False,
+                "fields": [
+                    {
+                        "name": spec.name,
+                        "type": spec.kind,
+                        "required": spec.required,
+                        "default": None if not spec.has_default() else spec.default,
+                        "minimum": spec.minimum,
+                        "maximum": spec.maximum,
+                    }
+                    for spec in (contract.fields if contract else ())
+                ],
+            }
+        )
+    return json_response({"routes": routes})
 
 
 def ops_counters(server: "Server", request: Request) -> Response:
@@ -370,6 +392,17 @@ def inventory_reorder_level(server: "Server", request: Request) -> Response:
 
 def metrics(server: "Server", request: Request) -> Response:
     return json_response(server.metrics.snapshot().as_dict())
+
+
+def requests_list(server: "Server", request: Request) -> Response:
+    entries = [entry.as_dict() for entry in server.journal.entries()]
+    request_id = request.query.get("request_id", [""])[0]
+    code = request.query.get("code", [""])[0]
+    if request_id:
+        entries = [entry for entry in entries if entry["request_id"] == request_id]
+    if code:
+        entries = [entry for entry in entries if entry["code"] == code]
+    return json_response({"requests": entries, "count": len(entries)})
 
 
 def metrics_reset(server: "Server", request: Request) -> Response:

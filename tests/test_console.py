@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import tempfile
 import unittest
+import uuid
 
 from waterplant.console.routes import route_table
 from waterplant.console.seed import seed_defaults
@@ -23,8 +24,11 @@ class ConsoleCase(unittest.TestCase):
         self.store.close()
         self._tmp.cleanup()
 
-    def call(self, method: str, path: str, payload: dict | None = None):
-        response = self.server.dispatch(method, path, payload)
+    def call(self, method: str, path: str, payload: dict | None = None, idempotent: bool | None = None):
+        if idempotent is None:
+            idempotent = method.upper() == "POST"
+        headers = {"Idempotency-Key": uuid.uuid4().hex} if idempotent else None
+        response = self.server.dispatch(method, path, payload, headers)
         body = response.body.decode("utf-8")
         parsed = json.loads(body) if response.content_type.startswith("application/json") else body
         return response.status, parsed
@@ -112,13 +116,14 @@ class ConsoleCase(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertTrue(listing["has_events"])
         self.assertEqual(listing["count"], 2)
-        status, _ = self.call("POST", "/history/clear")
+        status, _ = self.call("POST", "/history/clear", idempotent=True)
         self.assertEqual(status, 200)
         _, listing = self.call("GET", "/history")
         self.assertEqual(listing["count"], 0)
         status, error = self.call("POST", "/history", {})
         self.assertEqual(status, 400)
-        self.assertIn("kind", error["error"])
+        self.assertEqual(error["error"]["code"], "COMMON-0005")
+        self.assertEqual(error["error"]["details"][0]["field"], "kind")
 
     def test_intake_and_dosing_routes(self) -> None:
         status, body = self.call("POST", "/intake/flow", {"flow": 1200, "turbidity": 3.0})
@@ -172,16 +177,16 @@ class ConsoleCase(unittest.TestCase):
         _, body = self.call("POST", "/backwash/select", {"zone": 7})
         self.assertEqual(body["bed"], "b3")
 
-        status, _ = self.call("POST", "/backwash/enqueue", {"id": "b1"})
+        status, _ = self.call("POST", "/backwash/enqueue", {"id": "b1"}, idempotent=True)
         self.assertEqual(status, 200)
-        _, body = self.call("POST", "/backwash/replay")
+        _, body = self.call("POST", "/backwash/replay", idempotent=True)
         self.assertEqual(body["replayed"], ["b1"])
-        status, _ = self.call("POST", "/backwash/recover")
+        status, _ = self.call("POST", "/backwash/recover", idempotent=True)
         self.assertEqual(status, 200)
 
         status, body = self.call("POST", "/filter/load", {"id": "b1", "load": 20.0})
         self.assertEqual(body["load"], 20.0)
-        status, _ = self.call("POST", "/filter/reset")
+        status, _ = self.call("POST", "/filter/reset", idempotent=True)
         self.assertEqual(status, 200)
         status, _ = self.call("POST", "/filter/open", {"id": "b1"})
         self.assertEqual(status, 200)
@@ -221,6 +226,7 @@ class ConsoleCase(unittest.TestCase):
                 "zone": 1,
                 "amount": 12.0,
             },
+            idempotent=True,
         )
         self.assertEqual(status, 200)
         self.assertEqual(body["coag_dose"], 800.0)
@@ -285,7 +291,7 @@ class ConsoleCase(unittest.TestCase):
         self.assertEqual(body["window"], 2)
         _, body = self.call("GET", "/intake/trend")
         self.assertEqual(body["samples"], 2)
-        status, _ = self.call("POST", "/intake/trend/reset")
+        status, _ = self.call("POST", "/intake/trend/reset", idempotent=True)
         self.assertEqual(status, 200)
         _, body = self.call("GET", "/intake/trend")
         self.assertEqual(body["samples"], 0)
@@ -309,7 +315,12 @@ class ConsoleCase(unittest.TestCase):
         self.assertEqual(body["balance"], 70.0)
         self.assertEqual(body["needs_reorder"], [])
 
-        status, body = self.call("POST", "/inventory/consume", {"chemical": "chlorine", "amount": 50.0})
+        status, body = self.call(
+            "POST",
+            "/inventory/consume",
+            {"chemical": "chlorine", "amount": 50.0},
+            idempotent=True,
+        )
         self.assertEqual(body["balance"], 20.0)
         _, body = self.call("GET", "/inventory")
         self.assertEqual(body["needs_reorder"], ["chlorine"])
@@ -322,14 +333,20 @@ class ConsoleCase(unittest.TestCase):
         inventory_check = [c for c in checks["checks"] if c["name"] == "inventory"][0]
         self.assertEqual(inventory_check["status"], "ok")
 
-        status, body = self.call("POST", "/inventory/consume", {"chemical": "chlorine", "amount": 100.0})
-        self.assertEqual(status, 400)
-        self.assertIn("insufficient", body["error"])
+        status, body = self.call(
+            "POST",
+            "/inventory/consume",
+            {"chemical": "chlorine", "amount": 100.0},
+            idempotent=True,
+        )
+        self.assertEqual(status, 409)
+        self.assertEqual(body["error"]["code"], "INVENTORY-2001")
+        self.assertIn("insufficient", body["error"]["message"])
 
         status, body = self.call("GET", "/metrics")
         self.assertGreater(body["requests"], 0)
         self.assertIn("GET /inventory", body["by_route"])
-        status, body = self.call("POST", "/metrics/reset", {})
+        status, body = self.call("POST", "/metrics/reset", {}, idempotent=True)
         self.assertTrue(body["reset"])
         _, body = self.call("GET", "/metrics")
         self.assertEqual(body["requests"], 1)
@@ -347,30 +364,33 @@ class ConsoleCase(unittest.TestCase):
         self.assertIn("filter_beds", body)
 
     def test_reset_store_and_errors(self) -> None:
-        status, body = self.call("POST", "/ops/reset-store", {})
+        status, body = self.call("POST", "/ops/reset-store", {}, idempotent=True)
         self.assertEqual(status, 200)
         self.assertTrue(body["reset"])
         self.assertEqual(body["keys"], 0)
 
         status, body = self.call("GET", "/missing")
         self.assertEqual(status, 404)
-        self.assertIn("no route", body["error"])
+        self.assertEqual(body["error"]["code"], "COMMON-0201")
+        self.assertIn("no route", body["error"]["message"])
 
         status, body = self.call("DELETE", "/health")
         self.assertEqual(status, 405)
-        self.assertIn("not allowed", body["error"])
+        self.assertEqual(body["error"]["code"], "COMMON-0202")
+        self.assertIn("not allowed", body["error"]["message"])
 
         status, body = self.call("POST", "/coag/dose", {"flow": -5})
         self.assertEqual(status, 400)
-        self.assertIn("non-negative", body["error"])
+        self.assertEqual(body["error"]["code"], "COMMON-0008")
+        self.assertIn(">=", body["error"]["details"][0]["message"])
 
         status, body = self.call("POST", "/coag/dose", {"flow": "abc"})
         self.assertEqual(status, 400)
-        self.assertIn("must be a number", body["error"])
+        self.assertEqual(body["error"]["code"], "COMMON-0007")
 
         status, body = self.call("POST", "/filter/close", {"id": "ghost"})
-        self.assertEqual(status, 400)
-        self.assertIn("not found", body["error"])
+        self.assertEqual(status, 404)
+        self.assertEqual(body["error"]["code"], "FILTER-2001")
 
 
 class WsgiCase(unittest.TestCase):
@@ -396,6 +416,7 @@ class WsgiCase(unittest.TestCase):
                 "PATH_INFO": "/coag/dose",
                 "QUERY_STRING": "",
                 "CONTENT_LENGTH": str(len(payload)),
+                "HTTP_IDEMPOTENCY_KEY": "wsgi-dose",
                 "wsgi.input": Stream(),
             }
             body = b"".join(server(environ, start_response))

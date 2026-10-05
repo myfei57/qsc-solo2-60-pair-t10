@@ -7,6 +7,7 @@ import time
 import uuid
 from dataclasses import dataclass
 
+from waterplant.request_context import current_context
 from waterplant.store.commands import append_command, load_commands
 from waterplant.store.store import Store
 
@@ -23,9 +24,18 @@ class Entry:
     time: str
     kind: str
     detail: str
+    request_id: str = ""
+    idempotency_key: str = ""
 
     def as_dict(self) -> dict[str, str]:
-        return {"id": self.id, "time": self.time, "kind": self.kind, "detail": self.detail}
+        return {
+            "id": self.id,
+            "time": self.time,
+            "kind": self.kind,
+            "detail": self.detail,
+            "request_id": self.request_id,
+            "idempotency_key": self.idempotency_key,
+        }
 
 
 class Auditor:
@@ -35,11 +45,14 @@ class Auditor:
         self._store = store
 
     def record(self, kind: str, detail: str) -> Entry:
+        context = current_context()
         entry = Entry(
             id=uuid.uuid4().hex,
             time=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
             kind=kind,
             detail=detail,
+            request_id=context.request_id,
+            idempotency_key=context.idempotency_key,
         )
         append_command(self._store, AUDIT_KEY, json.dumps(entry.as_dict(), ensure_ascii=False))
         return entry
@@ -59,6 +72,8 @@ class Auditor:
                     time=str(payload.get("time", "")),
                     kind=str(payload.get("kind", "")),
                     detail=str(payload.get("detail", "")),
+                    request_id=str(payload.get("request_id", "")),
+                    idempotency_key=str(payload.get("idempotency_key", "")),
                 )
             )
         return entries

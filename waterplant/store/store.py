@@ -74,6 +74,19 @@ class Store:
             self._data = {}
             self._save_locked()
 
+    def snapshot(self) -> dict[str, str]:
+        """Return an isolated before-image usable by a transaction rollback."""
+
+        with self._lock:
+            return dict(self._data)
+
+    def restore(self, snapshot: dict[str, str]) -> None:
+        """Restore a snapshot taken by :meth:`snapshot` in the same store."""
+
+        with self._lock:
+            self._data = dict(snapshot)
+            self._save_locked()
+
     def close(self) -> None:
         with self._lock:
             self._save_locked()

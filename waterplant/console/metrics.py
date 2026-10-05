@@ -14,6 +14,7 @@ class MetricsSnapshot:
     errors: int
     by_status: dict[int, int]
     by_route: dict[str, int]
+    by_error_code: dict[str, int]
 
     def as_dict(self) -> dict[str, object]:
         return {
@@ -21,6 +22,7 @@ class MetricsSnapshot:
             "errors": self.errors,
             "by_status": {str(status): count for status, count in self.by_status.items()},
             "by_route": self.by_route,
+            "by_error_code": self.by_error_code,
         }
 
 
@@ -33,6 +35,7 @@ class Metrics:
         self._errors = 0
         self._by_status: dict[int, int] = {}
         self._by_route: dict[str, int] = {}
+        self._by_error_code: dict[str, int] = {}
 
     def record(self, method: str, path: str, status: int) -> None:
         with self._lock:
@@ -43,6 +46,10 @@ class Metrics:
             if status >= 400:
                 self._errors += 1
 
+    def record_error(self, code: str) -> None:
+        with self._lock:
+            self._by_error_code[code] = self._by_error_code.get(code, 0) + 1
+
     def snapshot(self) -> MetricsSnapshot:
         with self._lock:
             return MetricsSnapshot(
@@ -50,6 +57,7 @@ class Metrics:
                 errors=self._errors,
                 by_status=dict(self._by_status),
                 by_route=dict(self._by_route),
+                by_error_code=dict(self._by_error_code),
             )
 
     def reset(self) -> None:
@@ -58,3 +66,4 @@ class Metrics:
             self._errors = 0
             self._by_status = {}
             self._by_route = {}
+            self._by_error_code = {}

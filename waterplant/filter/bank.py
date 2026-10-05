@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from copy import deepcopy
 import threading
 
 from .bed import Bed
@@ -55,6 +56,18 @@ class Bank:
         with self._lock:
             for bed in self._beds.values():
                 bed.closed = False
+
+    def snapshot(self) -> dict[str, Bed]:
+        """Return an isolated copy of every mutable bed."""
+
+        with self._lock:
+            return {bed_id: deepcopy(bed) for bed_id, bed in self._beds.items()}
+
+    def restore(self, snapshot: dict[str, Bed]) -> None:
+        """Restore a snapshot taken by :meth:`snapshot`."""
+
+        with self._lock:
+            self._beds = {bed_id: deepcopy(bed) for bed_id, bed in snapshot.items()}
 
     def set_load(self, bed_id: str, load: float) -> None:
         with self._lock:
